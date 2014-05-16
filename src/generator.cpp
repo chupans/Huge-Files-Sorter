@@ -9,10 +9,13 @@ int generate()
   FILE* pFile;
   pFile = fopen("file.binary", "wb");
   unsigned int temp;
-  for (unsigned int j = 0; j < 505000; ++j){
-    //Some calculations to fill a[]
-    temp = dist(gen);
-    fwrite(&temp, 1, sizeof(unsigned int), pFile);
+  for (int i = 0; i < 200; i++)
+  {
+    for (unsigned int j = 0; j < 15000000; ++j)
+    {
+      temp = dist(gen);
+      fwrite(&temp, 1, sizeof(unsigned int), pFile);
+    }
   }
   fclose(pFile);
   return 0;

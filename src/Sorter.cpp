@@ -1,13 +1,19 @@
 #include "Sorter.h"
 #include "Memory.h"
 #include <algorithm>
+#include <boost/foreach.hpp>
 using namespace std;
 using namespace boost;
 using namespace filesystem;
 
 CSorter::CSorter( char *filePath ) : m_filePath(filePath)
 {
+  m_threadGroup = NULL;
   m_valuesReadCount = 0;
+  auto alloc = allocator<unsigned int>();
+  m_chunkValuesCount = min(150000000, GetFileValuesCount());
+  m_chunkValuesCount /= GetCoresCount();
+  CreateBuffers();
 //   try
 //   {
 //     a.resize(a.max_size()/sizeof(unsigned int) - 10);
@@ -24,6 +30,10 @@ CSorter::CSorter( char *filePath ) : m_filePath(filePath)
 
 CSorter::~CSorter(void)
 {
+  BOOST_FOREACH(auto pVector, m_buffers)
+  {
+    pVector->~vector();
+  }
 }
 
 size_t CSorter::GetFileSize()
@@ -44,24 +54,30 @@ void CSorter::Process()
   buf.reserve(GetFileChunkSize());
   m_pFile = fopen(m_filePath.string().data(), "rb");
 
-  CreateBuffers(2);
-
   while(GetValuesLeftToRead() > 0)
   {
-    buf.resize(GetFileChunkSize());
-    ReadIntoVector(buf);
-    //m_Thread = boost::thread(&CSorter::ReadIntoVector, this, boost::ref(buf));
-    sort(buf.begin(), buf.end());
-    SaveVectorToFile(buf);
+    BOOST_FOREACH(auto pVector, m_buffers)
+    {
+      pVector->resize(GetFileChunkSize());
+      ReadIntoVector(*pVector);
+    }
+    PrepareThreads();
+    printf("Threads prepared. Now joining\n");
+    m_threadGroup->join_all();
+    BOOST_FOREACH(auto pVector, m_buffers)
+    {
+      SaveVectorToFile(*pVector);
+    }
   }
   fclose(m_pFile);
 
-  MergeAllFiles();
+  path newFile = GetNextTempFileName();
+  MergeSortedFiles(newFile);
 }
 
 size_t CSorter::GetFileChunkSize()
 {    
-  return min(100000, GetValuesLeftToRead());
+  return min(m_chunkValuesCount, GetValuesLeftToRead());
 }
 
 size_t CSorter::GetFileValuesCount()
@@ -71,12 +87,10 @@ size_t CSorter::GetFileValuesCount()
 
 void CSorter::ReadIntoVector( std::vector<unsigned int> &buffer )
 {
-  int i = 0;
-  for(i = 0; !feof(m_pFile) && i != buffer.size(); i++)
-  {
-    fread(&buffer[i], sizeof(unsigned int), 1, m_pFile);
-    m_valuesReadCount++;
-  }
+  size_t count = buffer.size();
+  if (count == 0)
+    return;
+  m_valuesReadCount += fread(&buffer[0], sizeof(unsigned int), count, m_pFile);
 }
 
 unsigned int ReadOneInt(FILE *pFile)
@@ -206,33 +220,109 @@ std::string CSorter::GetNextTempFileName()
   return filename;
 }
 
-void CSorter::MergeAllFiles()
+void CSorter::PrepareThreads()
 {
-  int i_1, i_2;
-  vector<path> temp;
-
-  while(m_sortedFileChunks.size() != 1)
+  if (m_threadGroup != NULL)
   {
-    temp.clear();
-    for (i_1 = 0, i_2 = 1; i_2 < m_sortedFileChunks.size(); i_1+=2, i_2+=2)
-    {
-      path newFile = GetNextTempFileName();
-      MergeTwoSortedFiles(m_sortedFileChunks[i_1], m_sortedFileChunks[i_2], newFile);
-      temp.push_back(newFile);
-    }
-    if (i_1 < m_sortedFileChunks.size())
-      temp.push_back(m_sortedFileChunks[i_1]);
-    m_sortedFileChunks = temp;
+    m_threadGroup->~thread_group();
+  }
+  m_threadGroup = new boost::thread_group();
+  BOOST_FOREACH(auto pVector, m_buffers)
+  {
+    m_threadGroup->create_thread(boost::bind(&CSorter::SortSingleBuffer, pVector));
   }
 }
 
-void CSorter::PrepareThreads( std::vector<unsigned int> &buf1 )
+void CSorter::CreateBuffers()
 {
-  unsigned int nthreads = boost::thread::hardware_concurrency();
-
+  vector<unsigned int> *pVector;
+  auto nCores = GetCoresCount();
+  for (int i = 0; i < nCores; i++)
+  {
+    pVector = new vector<unsigned int>();
+    pVector->reserve(m_chunkValuesCount);
+    m_buffers.push_back(pVector);
+  }
 }
 
-void CSorter::CreateBuffers(unsigned int buffersCount)
+unsigned int CSorter::GetCoresCount()
 {
-  //size_t freeMem = vector<unsigned int>::max_size();
+  return thread::hardware_concurrency();
+}
+
+//Wrapper to use in threads. To make sure that iterators are valid
+void CSorter::SortSingleBuffer( std::vector<unsigned int> *buf )
+{
+  printf("started sorting\n");
+  sort(buf->begin(), buf->end());
+}
+
+struct FileToReadFrom
+{
+public:
+  FileToReadFrom(const char *filePath) { pFile = fopen(filePath, "rb"); readFrom = true; ended = false;};
+  ~FileToReadFrom() { fclose(pFile);};
+  void ReadNextVal() 
+  {
+    if (readFrom)
+    {
+      fread(&val, sizeof(unsigned int), 1, pFile); 
+      if (feof(pFile)) 
+        ended = true; 
+      readFrom = false; 
+    }
+  };
+  FILE *pFile;
+  bool readFrom;
+  bool ended;
+  unsigned int val;
+};
+
+void CSorter::MergeSortedFiles( boost::filesystem::path resultFile )
+{
+  bool continueMerge = true;
+  unsigned int resultTemp;
+  FILE *pResultFile;
+  auto files = list<FileToReadFrom*>();
+  list<FileToReadFrom*>::iterator fIt;
+
+  BOOST_FOREACH(auto filePath, m_sortedFileChunks)
+  {
+    files.push_back(new FileToReadFrom(filePath.string().data()));
+  }
+  pResultFile = fopen(resultFile.string().data(), "wb");
+
+  while (continueMerge)
+  {
+    for (fIt = files.begin(); fIt != files.end();)
+    {
+      (*fIt)->ReadNextVal();
+
+      if ((*fIt)->ended)
+      {
+        (*fIt)->~FileToReadFrom();
+        fIt = files.erase(fIt);
+      }
+      else
+        fIt++;
+    }
+
+    if (files.size() == 0)
+      continueMerge = false;
+    else
+    {
+      fIt = min_element(files.begin(), files.end(), [](FileToReadFrom* l, FileToReadFrom* r) { return l->val < r->val; });
+
+      resultTemp = (*fIt)->val;
+      (*fIt)->readFrom = true;
+
+      fwrite(&resultTemp, sizeof(unsigned int), 1, pResultFile);
+    }
+  }
+
+  fclose(pResultFile);
+  BOOST_FOREACH(auto pFile, files)
+  {
+    pFile->~FileToReadFrom();
+  }
 }
