@@ -4,6 +4,6 @@
 int main()
 {
   generate();
-  CSorter a("C:\\work\\Huge Files Sorter\\Huge Files Sorter\\file.binary");
+  CSorter a("C:\\work\\Huge Files Sorter\\test\\file.binary");
   a.Process();
 }

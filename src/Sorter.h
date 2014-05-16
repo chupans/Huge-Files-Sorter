@@ -3,6 +3,7 @@
 #include <vector>
 #include <list>
 #include <boost/filesystem.hpp>
+#include <boost/thread.hpp>
 
 
 class CSorter
@@ -23,10 +24,14 @@ private:
   void MergeTwoSortedFiles(boost::filesystem::path file1, boost::filesystem::path file2, boost::filesystem::path resultFile);
   void MergeTwoSortedVectors(std::vector<unsigned int> &buf1, std::vector<unsigned int> &buf2, boost::filesystem::path resultFile);
   size_t GetValuesLeftToRead();
+  void CreateBuffers(unsigned int buffersCount);
+  void PrepareThreads(std::vector<unsigned int> &buf1);
 
   boost::filesystem::path m_filePath;
   std::vector<boost::filesystem::path> m_sortedFileChunks;
   FILE *m_pFile;
   size_t m_valuesReadCount;
+  std::vector< std::vector<unsigned int>* > m_buffers;
+  boost::thread_group m_threadGroup;
 
 };

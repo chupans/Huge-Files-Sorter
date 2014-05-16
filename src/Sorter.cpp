@@ -44,10 +44,13 @@ void CSorter::Process()
   buf.reserve(GetFileChunkSize());
   m_pFile = fopen(m_filePath.string().data(), "rb");
 
+  CreateBuffers(2);
+
   while(GetValuesLeftToRead() > 0)
   {
     buf.resize(GetFileChunkSize());
     ReadIntoVector(buf);
+    //m_Thread = boost::thread(&CSorter::ReadIntoVector, this, boost::ref(buf));
     sort(buf.begin(), buf.end());
     SaveVectorToFile(buf);
   }
@@ -221,4 +224,15 @@ void CSorter::MergeAllFiles()
       temp.push_back(m_sortedFileChunks[i_1]);
     m_sortedFileChunks = temp;
   }
+}
+
+void CSorter::PrepareThreads( std::vector<unsigned int> &buf1 )
+{
+  unsigned int nthreads = boost::thread::hardware_concurrency();
+
+}
+
+void CSorter::CreateBuffers(unsigned int buffersCount)
+{
+  //size_t freeMem = vector<unsigned int>::max_size();
 }
