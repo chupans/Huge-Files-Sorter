@@ -1,3 +1,3 @@
 #pragma once
 
-int generate();
+int generate(int megabytes, char *file);
