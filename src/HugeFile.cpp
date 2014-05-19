@@ -1,11 +1,15 @@
 #include "HugeFile.h"
 #include "Utility.h"
-#include "assert.h"
+#include <algorithm>
+#include <assert.h>
+
 using namespace boost;
 using namespace filesystem;
 using namespace std;
 
 #ifdef BOOST_OS_WINDOWS
+#define DWORD_MAX 0xffffffffUL
+#define MAX_BUFFER_TO_WRITE DWORD_MAX
 
 CHugeFile::CHugeFile()
 {
@@ -29,7 +33,6 @@ void CHugeFile::CloseFile()
     m_hFile = NULL;
   }
 }
-
 
 void CHugeFile::CreateAndOpenForWriting(path filePath)
 {
@@ -55,11 +58,27 @@ void CHugeFile::OpenForReading(path filePath)
   m_internalBuffer.resize(newSize);
 }
 
-size_t CHugeFile::ReadValuesIntoBuffer(vector<unsigned int> &buffer)
+uintmax_t CHugeFile::ReadValuesIntoBuffer( std::vector<unsigned int> &buffer )
 {
   DWORD NumberOfBytesRead = 0;
-  ReadFile(m_hFile, &buffer[0], sizeof(unsigned int) * buffer.size(), &NumberOfBytesRead , NULL);
-  return (size_t)NumberOfBytesRead / sizeof(unsigned int);
+  uintmax_t nBytesToRead = sizeof(unsigned int) * buffer.size();
+  uintmax_t nOverallBytesRead = 0;
+  unsigned int *pData = &buffer[0];
+
+  if (buffer.size() == 0)
+    return 0;
+
+  //Reading more bytes than DWORD can handle
+  while (nBytesToRead > 0)
+  {
+    ReadFile(m_hFile, pData, std::min(nBytesToRead, (boost::uintmax_t)MAX_BUFFER_TO_WRITE), &NumberOfBytesRead, NULL);
+    pData += NumberOfBytesRead / sizeof(unsigned int);
+    nBytesToRead -= NumberOfBytesRead;
+    nOverallBytesRead += NumberOfBytesRead;
+    if (NumberOfBytesRead == 0)
+      return nOverallBytesRead / sizeof(unsigned int);
+  }
+  return nOverallBytesRead / sizeof(unsigned int); 
 }
 
 bool CHugeFile::GetNextVal(unsigned int &val)
@@ -93,14 +112,26 @@ bool CHugeFile::GetNextVal(unsigned int &val)
   }
   else
   {
-    assert(0);
+    return false;
   }
 }
 
 void CHugeFile::WriteBufferIntoFile(vector<unsigned int> &buffer)
 {
   DWORD NumberOfBytesWritten = 0;
-  WriteFile(m_hFile, &buffer[0], sizeof(unsigned int) * buffer.size(), &NumberOfBytesWritten, NULL);
+  uintmax_t nBytesToWrite = sizeof(unsigned int) * buffer.size();
+  unsigned int *pData = &buffer[0];
+
+  //Writing more bytes than DWORD can handle
+  while (nBytesToWrite > 0)
+  {
+    WriteFile(m_hFile, pData, std::min(nBytesToWrite, (boost::uintmax_t)MAX_BUFFER_TO_WRITE), &NumberOfBytesWritten, NULL);
+    if (NumberOfBytesWritten == 0)
+      return;
+    pData += NumberOfBytesWritten / sizeof(unsigned int);
+    nBytesToWrite -= NumberOfBytesWritten;
+    printf("Wrote %u MB of buffer sized %u MB\n", (unsigned int)NumberOfBytesWritten/(1024*1024), buffer.size()/(256*1024));
+  }
 }
 
 #elif #ifdef BOOST_OS_LINUX
@@ -120,7 +151,7 @@ void CHugeFile::OpenForReading(path filePath)
 {
 
 }
-size_t CHugeFile::ReadValuesIntoBuffer(vector<unsigned int> &buffer)
+uintmax_t CHugeFile::ReadValuesIntoBuffer(vector<unsigned int> &buffer)
 {
   return 0;
 }

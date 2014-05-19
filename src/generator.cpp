@@ -2,7 +2,7 @@
 #include <boost/random.hpp>
 #include "limits.h"
 
-int generate(int megabytes, char *file)
+int Generate(int megabytes, char *file)
 {
   boost::random::mt11213b gen;
   boost::random::uniform_int_distribution<unsigned int> dist(0, UINT_MAX);
